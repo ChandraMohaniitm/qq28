@@ -1,3 +1,5 @@
+import dotenv from "dotenv";
+dotenv.config();
 export const config = {
   runtime: "edge",
 };
@@ -7,14 +9,21 @@ export default async function handler(req) {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  const body = await req.json();
-  const { prompt } = body;
+  const { prompt } = await req.json();
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const apiKey = process.env.AIPIPE_TOKEN;
+  const baseUrl =
+    process.env.AIPIPE_BASE_URL || "https://aipipe.org/openai/v1";
+
+  if (!apiKey) {
+    return new Response("AIPIPE_TOKEN not configured", { status: 500 });
+  }
+
+  const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+      "Authorization": `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: "gpt-3.5-turbo",
@@ -22,7 +31,7 @@ export default async function handler(req) {
       messages: [
         {
           role: "system",
-          content: "You are a senior Java developer."
+          content: "You are a senior Java developer.",
         },
         {
           role: "user",
@@ -39,20 +48,19 @@ Include:
 - Comments
 
 ${prompt}
-`
-        }
+`,
+        },
       ],
       max_tokens: 1800,
-      temperature: 0.6
+      temperature: 0.6,
     }),
   });
 
-  const readableStream = new ReadableStream({
+  const stream = new ReadableStream({
     async start(controller) {
       const reader = response.body.getReader();
-      const decoder = new TextDecoder();
 
-      // Immediate first chunk (super fast)
+      // Instant first token
       controller.enqueue(
         new TextEncoder().encode(
           `data: {"choices":[{"delta":{"content":"Generating Java code...\\n"}}]}\n\n`
@@ -62,16 +70,17 @@ ${prompt}
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         controller.enqueue(value);
       }
 
-      controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+      controller.enqueue(
+        new TextEncoder().encode("data: [DONE]\n\n")
+      );
       controller.close();
     },
   });
 
-  return new Response(readableStream, {
+  return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
